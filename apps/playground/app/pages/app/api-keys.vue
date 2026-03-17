@@ -23,7 +23,7 @@ async function fetchApiKeys() {
   loading.value = true
   try {
     const { data } = await client.apiKey.list()
-    apiKeys.value = data || []
+    apiKeys.value = data?.apiKeys ?? []
   }
   catch (error) {
     console.error('Error fetching API keys:', error)

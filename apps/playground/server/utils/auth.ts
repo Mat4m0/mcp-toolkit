@@ -2,12 +2,10 @@ import type { H3Event } from 'h3'
 import { betterAuth } from 'better-auth'
 import { drizzleAdapter } from 'better-auth/adapters/drizzle'
 import { apiKey } from '@better-auth/api-key'
-// To run `auth:schema` command, you need to import the schema from the .nuxt/hub/database/schema.js file
-// import { db, schema } from '../../.nuxt/hub/db.mjs'
-// But in dev & prod, use 'hub:db' to import the schema
 import { db, schema } from 'hub:db'
 
 export const auth = betterAuth({
+  basePath: '/api/auth',
   database: drizzleAdapter(
     db,
     {
@@ -85,7 +83,7 @@ export async function getApiKeyUser(event: H3Event) {
   }
 
   const user = await db.query.user.findFirst({
-    where: (users, { eq }) => eq(users.id, result.key!.userId),
+    where: (users, { eq }) => eq(users.id, result.key!.referenceId),
   })
 
   if (!user) {

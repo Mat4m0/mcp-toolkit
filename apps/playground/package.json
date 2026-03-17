@@ -15,7 +15,7 @@
     "generate": "nuxi generate",
     "lint": "eslint .",
     "lint:fix": "eslint . --fix",
-    "auth:schema": "npx @better-auth/cli generate --config server/utils/auth.ts --output server/db/schema/auth.ts -y && eslint . --fix",
+    "auth:schema": "npx @better-auth/cli generate --config scripts/auth-schema.config.ts --output server/db/schema/auth.ts -y && eslint . --fix",
     "db:generate": "nuxt db generate",
     "db:migrate": "nuxt db migrate"
   },
