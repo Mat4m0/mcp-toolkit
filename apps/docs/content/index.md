@@ -21,7 +21,7 @@ Add a Model Context Protocol (MCP) server to your Nuxt application. Connect your
 
 ::landing-features
 #title
-Make your App accessible to Ai
+Make your App accessible to AI
 
 #description
 Use the Model Context Protocol to standardize how LLMs interact with your Nuxt application.
@@ -31,15 +31,31 @@ Use the Model Context Protocol to standardize how LLMs interact with your Nuxt a
 
 :landing-feature-item{description="Automatic discovery of tools, resources and prompts. Just create files in the server/mcp directory." icon="i-lucide-sparkles" title="Zero Configuration"}
 
-:landing-feature-item{description="Cache tool and resource responses with Nitro. Just add cache: '1h' to your definition." icon="i-lucide-database" title="Built-in Cache"}
+:landing-feature-item{description="Define your tools with Zod schemas and full TypeScript inference. No more guessing argument types." icon="i-lucide-shield-check" title="Type-Safe Tools"}
 
-:landing-feature-item{description="InstallButton component and SVG badges to let users add your MCP server to their IDE instantly." icon="i-lucide-download" title="1-Click Install"}
+:landing-feature-item{description="Built on the official MCP SDK, ensuring compatibility with all MCP clients like Claude, Cursor, ChatGPT and more." icon="i-lucide-check-circle-2" title="Standard Compatible"}
 
-:landing-feature-item{description="Built on the official MCP SDK, ensuring compatibility with all MCP clients like Claude, ChatGPT and more." icon="i-lucide-check-circle-2" title="Standard Compatible"}
+:landing-feature-item{description="Let LLMs write JavaScript that orchestrates tools in a secure V8 sandbox. Cut token overhead by up to 82%." icon="i-lucide-terminal" title="Code Mode"}
 
-:landing-feature-item{description="Define your tools with Zod schemas and full TypeScript inference. No more guessing arguments types." icon="i-lucide-shield-check" title="Type-Safe Tools"}
+:landing-feature-item{description="Intercept requests to add authentication, logging and rate limiting. Access event context from your tools." icon="i-lucide-shield" title="Middleware"}
 
-:landing-feature-item{description="Debug your MCP server in real-time with the built-in inspector. View requests, responses and errors." icon="i-lucide-bug" title="DevTools Integrated"}
+:landing-feature-item{description="Cache tool and resource responses with Nitro. Just add cache: '1h' to any definition." icon="i-lucide-zap" title="Built-in Cache"}
+
+:landing-feature-item{description="Persist state across tool calls with useMcpSession(). Build multi-step workflows and track conversations." icon="i-lucide-save" title="Sessions"}
+
+:landing-feature-item{description="Show different tools per user with enabled guards. Control visibility based on authentication, roles or context." icon="i-lucide-toggle-right" title="Dynamic Definitions"}
+
+:landing-feature-item{description="InstallButton component, SVG badges and deeplinks to let users add your MCP server to their IDE instantly." icon="i-lucide-download" title="1-Click Install"}
+
+:landing-feature-item{description="Create separate MCP endpoints with their own tools, resources and configuration. Organize by domain or version." icon="i-lucide-server" title="Multiple Handlers"}
+
+:landing-feature-item{description="Verify LLMs call the right tools with the AI SDK and Evalite. Catch regressions before they reach production." icon="i-lucide-flask-conical" title="Evals"}
+
+:landing-feature-item{description="Let AI assistants help you build, review and troubleshoot your MCP server with the Agent Skills specification." icon="i-lucide-wand-2" title="Agent Skills"}
+
+:landing-feature-item{description="Organize tools, resources and prompts into groups with tags. Auto-inferred from subdirectories or set explicitly." icon="i-lucide-tags" title="Groups & Tags"}
+
+:landing-feature-item{description="Debug your MCP server in real-time with the built-in inspector. View tools, resources, prompts, connections and logs." icon="i-lucide-bug" title="DevTools Integrated"}
 
   :::landing-feature-cta
   ---
@@ -65,15 +81,16 @@ Define tools, resources and prompts using standard TypeScript files. No complex 
 import { z } from 'zod'
 
 export default defineMcpTool({
-  name: 'get_weather',
   description: 'Get current weather for a location',
   inputSchema: {
     city: z.string().describe('City name'),
     unit: z.enum(['celsius', 'fahrenheit']).default('celsius')
   },
-  cache: '1h', // (optional) cache for 1 hour
+  annotations: { readOnlyHint: true },
+  cache: '1h',
   handler: async ({ city, unit }) => {
-    return `Weather in ${city} is 20° ${unit}`
+    const data = await fetchWeather(city)
+    return { temperature: data.temp, unit, city }
   }
 })
 ```
@@ -83,7 +100,6 @@ export default defineMcpTool({
 // server/mcp/resources/readme.ts
 export default defineMcpResource({
   file: 'README.md',
-  name: 'Project README',
   description: 'The project documentation',
   annotations: {
     audience: ['user', 'assistant'],
@@ -98,22 +114,13 @@ export default defineMcpResource({
 import { z } from 'zod'
 
 export default defineMcpPrompt({
-  name: 'summarize',
   description: 'Summarize a text',
   inputSchema: {
-    text: z.string().describe('Text to summarize')
+    text: z.string().describe('Text to summarize'),
+    format: z.enum(['bullet-points', 'paragraph']).default('paragraph')
   },
-  handler: async ({ text }) => {
-    return {
-      messages: [{
-        role: 'user',
-        content: {
-          type: 'text',
-          text: `Please summarize: ${text}`
-        }
-      }]
-    }
-  }
+  handler: async ({ text, format }) =>
+    `Summarize this text as ${format}:\n\n${text}`
 })
 ```
 ::
