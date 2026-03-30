@@ -1,8 +1,7 @@
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { WebStandardStreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js'
-import { getHeader } from 'h3'
 import { useStorage } from 'nitropack/runtime'
-import { eventToWebRequest } from '../utils'
+import { getHeader, toWebRequest } from '../compat'
 // @ts-expect-error - Generated template
 import config from '#nuxt-mcp-toolkit/config.mjs'
 import { createMcpTransportHandler } from './types'
@@ -39,7 +38,7 @@ function ensureCleanup(maxDuration: number) {
 export default createMcpTransportHandler(async (createServer, event) => {
   const sessionsConfig = config.sessions
   const sessionsEnabled = sessionsConfig?.enabled ?? false
-  const request = eventToWebRequest(event)
+  const request = await toWebRequest(event)
 
   if (!sessionsEnabled) {
     const server = createServer()

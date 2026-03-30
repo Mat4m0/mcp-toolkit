@@ -1,6 +1,6 @@
 import { useStorage, useEvent } from 'nitropack/runtime'
-import { getHeader } from 'h3'
 import type { Storage } from 'unstorage'
+import { getHeader } from './compat'
 
 export interface McpSessionStore<T = Record<string, unknown>> {
   get<K extends keyof T & string>(key: K): Promise<T[K] | null>
