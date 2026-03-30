@@ -9,11 +9,11 @@ export default defineMcpTool({
   },
   enabled: event => event.context.role === 'admin',
   handler: async ({ name }) => {
-    const mcp = useMcpServer()
+    const mcp = await useMcpServer()
     const removed = mcp.removeTool(name)
     if (removed) {
-      return textResult(`Shortcut "${name}" removed.`)
+      return `Shortcut "${name}" removed.`
     }
-    return textResult(`Shortcut "${name}" not found. It may have already been removed or never created in this session.`)
+    return `Shortcut "${name}" not found. It may have already been removed or never created in this session.`
   },
 })

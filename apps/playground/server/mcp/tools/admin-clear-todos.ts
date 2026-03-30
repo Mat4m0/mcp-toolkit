@@ -15,10 +15,10 @@ export default defineMcpTool({
   handler: async () => {
     const allTodos = await db.query.todos.findMany()
     if (allTodos.length === 0) {
-      return textResult('No todos to delete.')
+      return 'No todos to delete.'
     }
 
     await db.delete(schema.todos)
-    return textResult(`Deleted ${allTodos.length} todos.`)
+    return `Deleted ${allTodos.length} todos.`
   },
 })

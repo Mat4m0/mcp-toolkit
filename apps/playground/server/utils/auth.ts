@@ -1,4 +1,5 @@
 import type { H3Event } from 'h3'
+import { eq } from 'drizzle-orm'
 import { betterAuth } from 'better-auth'
 import { drizzleAdapter } from 'better-auth/adapters/drizzle'
 import { apiKey } from '@better-auth/api-key'
@@ -86,15 +87,17 @@ export async function getApiKeyUser(event: H3Event) {
       return null
     }
 
-    const user = await db.query.user.findFirst({
-      where: (users, { eq }) => eq(users.id, result.key!.referenceId),
-    })
+    const [userRow] = await db
+      .select()
+      .from(schema.user)
+      .where(eq(schema.user.id, result.key!.referenceId))
+      .limit(1)
 
-    if (!user) {
+    if (!userRow) {
       return null
     }
 
-    return { user, apiKey: result.key }
+    return { user: userRow, apiKey: result.key }
   }
   catch {
     return null

@@ -13,6 +13,6 @@ export default defineMcpTool({
     message: z.string().describe('A message to echo back'),
   },
   handler: async ({ message }) => {
-    return textResult(`Hello, ${message}!`)
+    return `Hello, ${message}!`
   },
 })

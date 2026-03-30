@@ -17,13 +17,13 @@ export default defineMcpTool({
       db.query.todos.findMany(),
     ])
 
-    return jsonResult({
+    return {
       users: users.length,
       todos: {
         total: todos.length,
-        completed: todos.filter((t: { completed: boolean }) => t.completed).length,
-        pending: todos.filter((t: { completed: boolean }) => !t.completed).length,
+        completed: todos.filter((t: { done: boolean }) => t.done).length,
+        pending: todos.filter((t: { done: boolean }) => !t.done).length,
       },
-    })
+    }
   },
 })

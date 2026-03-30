@@ -1,3 +1,6 @@
+import { desc, eq } from 'drizzle-orm'
+import { db, schema } from 'hub:db'
+
 export default defineMcpTool({
   name: 'list_todos',
   group: 'todos',
@@ -13,15 +16,16 @@ export default defineMcpTool({
     const event = useEvent()
     const userId = event.context.userId as string
 
-    const userTodos = await db.query.todos.findMany({
-      where: (todos, { eq }) => eq(todos.userId, userId),
-      orderBy: (todos, { desc }) => desc(todos.createdAt),
-    })
+    const userTodos = await db
+      .select()
+      .from(schema.todos)
+      .where(eq(schema.todos.userId, userId))
+      .orderBy(desc(schema.todos.createdAt))
 
     if (userTodos.length === 0) {
-      return jsonResult([])
+      return []
     }
 
-    return jsonResult(userTodos)
+    return userTodos
   },
 })

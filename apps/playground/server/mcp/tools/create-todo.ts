@@ -31,6 +31,6 @@ export default defineMcpTool({
       updatedAt: new Date(),
     }).returning()
 
-    return textResult(`Todo created successfully!\n\nTitle: ${todo.title}${todo.content ? `\nContent: ${todo.content}` : ''}`)
+    return `Todo created successfully!\n\nTitle: ${todo.title}${todo.content ? `\nContent: ${todo.content}` : ''}`
   },
 })

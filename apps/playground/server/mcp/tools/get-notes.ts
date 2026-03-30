@@ -20,9 +20,9 @@ export default defineMcpTool({
     const notes = await session.get('notes') ?? []
 
     if (notes.length === 0) {
-      return textResult('No notes in this session yet. Use the add_note tool to create one.')
+      return 'No notes in this session yet. Use the add_note tool to create one.'
     }
 
-    return jsonResult(notes)
+    return notes
   },
 })

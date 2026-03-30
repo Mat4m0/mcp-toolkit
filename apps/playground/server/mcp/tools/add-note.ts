@@ -26,6 +26,6 @@ export default defineMcpTool({
     notes.push({ text: note, createdAt: new Date().toISOString() })
     await session.set('notes', notes)
 
-    return textResult(`Note added (${notes.length} total in this session).`)
+    return `Note added (${notes.length} total in this session).`
   },
 })

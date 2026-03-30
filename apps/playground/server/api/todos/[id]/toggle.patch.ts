@@ -1,3 +1,6 @@
+import { and, eq } from 'drizzle-orm'
+import { db, schema } from 'hub:db'
+
 export default eventHandler(async (event) => {
   const { user } = await requireUser(event)
   const id = parseInt(getRouterParam(event, 'id') as string)
@@ -9,14 +12,11 @@ export default eventHandler(async (event) => {
     })
   }
 
-  const { todos } = schema
-
-  const existingTodo = await db.query.todos.findFirst({
-    where: (todos, { eq, and }) => and(
-      eq(todos.id, id),
-      eq(todos.userId, user.id),
-    ),
-  })
+  const [existingTodo] = await db
+    .select()
+    .from(schema.todos)
+    .where(and(eq(schema.todos.id, id), eq(schema.todos.userId, user.id)))
+    .limit(1)
 
   if (!existingTodo) {
     throw createError({
@@ -26,15 +26,15 @@ export default eventHandler(async (event) => {
   }
 
   const updatedTodo = await db
-    .update(todos)
+    .update(schema.todos)
     .set({
       done: !existingTodo.done,
       updatedAt: new Date(),
     })
     .where(
       and(
-        eq(todos.id, id),
-        eq(todos.userId, user.id),
+        eq(schema.todos.id, id),
+        eq(schema.todos.userId, user.id),
       ),
     )
     .returning()

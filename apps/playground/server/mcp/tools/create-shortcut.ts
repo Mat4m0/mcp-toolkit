@@ -10,7 +10,7 @@ export default defineMcpTool({
   },
   enabled: event => event.context.role === 'admin',
   handler: async ({ name, status }) => {
-    const mcp = useMcpServer()
+    const mcp = await useMcpServer()
 
     mcp.registerTool(name, {
       description: `Shortcut: list ${status} todos`,
@@ -22,9 +22,9 @@ export default defineMcpTool({
         : allTodos.filter((t: { done: boolean }) =>
             status === 'completed' ? t.done : !t.done,
           )
-      return jsonResult(filtered)
+      return filtered
     })
 
-    return textResult(`Shortcut "${name}" created — it now appears in your tool list.`)
+    return `Shortcut "${name}" created — it now appears in your tool list.`
   },
 })

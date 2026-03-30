@@ -76,12 +76,7 @@ export default defineMcpTool({
     param: z.string().describe('Parameter description'),
   },
   handler: async ({ param }) => {
-    return {
-      content: [{
-        type: 'text',
-        text: 'Result',
-      }],
-    }
+    return 'Result' // or return { foo: 'bar' } for JSON; full CallToolResult still supported
   },
 })
 ```
@@ -357,21 +352,45 @@ See [detailed middleware guide →](./references/middleware.md)
 
 ## Review & Best Practices
 
+### MCP code review (agents & humans)
+
+When reviewing or modernizing `server/mcp/**`, walk through this list so implementations stay aligned with current toolkit behavior and Nuxt server typing.
+
+**Tool return values**
+
+- Prefer **direct returns**: `string`, `number`, `boolean`, plain objects, or arrays. The module wraps them into `CallToolResult` (JSON is pretty-printed for objects).
+- **Avoid deprecated helpers** unless you must support very old code: `textResult`, `jsonResult`, `errorResult` — migrate to direct values and `throw createError({ statusCode, message })` (or `throw new Error(...)`) for failures.
+- Reserve **full `CallToolResult`** (`content`, `structuredContent`, embedded resources, `isError`) for cases that need explicit MCP shapes.
+
+**Async context & server composables**
+
+- **`useMcpServer()`** needs `nitro.experimental.asyncContext: true` in `nuxt.config`. If TypeScript reports `Promise<McpServerHelper>` (common with server auto-imports), use `const mcp = await useMcpServer()` before `registerTool` / `removeTool` / etc.
+- **`useMcpSession()`** / **`useEvent()`**: await if the IDE or `vue-tsc` indicates a `Promise`; keep session and event usage inside tool, resource, or prompt handlers.
+
+**Hygiene**
+
+- Every **`await`** on a Promise-backed call in handlers (DB, `fetch`, composables that return promises).
+- **Zod**: required `.describe()` on schema fields for good model UX; use `inputExamples` for non-trivial shapes.
+- **Annotations**: set `readOnlyHint`, `destructiveHint`, `idempotentHint`, `openWorldHint` honestly.
+- Run **`pnpm eslint`** / **`nuxi typecheck`** on the app after refactors (catch deprecated APIs and missing `await` early).
+
 ### Tool Checklist
 
 ✅ Use kebab-case filenames
 ✅ Add `.describe()` to all Zod fields
-✅ Return `isError: true` for errors
+✅ Return plain values or throw `createError` for failures (not deprecated `errorResult`)
 ✅ Add caching for expensive ops
 ✅ Clear, actionable descriptions
 ✅ Validate all inputs
 ✅ Add `annotations` (readOnlyHint, destructiveHint, etc.)
 ✅ Add `inputExamples` for tools with optional/complex params
+✅ `nitro.experimental.asyncContext: true` when using `useMcpServer()`
 
 ❌ Generic descriptions
 ❌ Skip error handling
 ❌ Expose sensitive data
 ❌ No input validation
+❌ `textResult` / `jsonResult` / `errorResult` in new code (deprecated)
 
 ### Resource Checklist
 

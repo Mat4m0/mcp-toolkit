@@ -1,5 +1,6 @@
 import { z } from 'zod'
 import { eq, and } from 'drizzle-orm'
+import { db, schema } from 'hub:db'
 
 export default defineMcpTool({
   name: 'toggle_todo',
@@ -17,15 +18,17 @@ export default defineMcpTool({
     const event = useEvent()
     const userId = event.context.userId as string
 
-    const existingTodo = await db.query.todos.findFirst({
-      where: (todos, { eq: e, and: a }) => a(e(todos.id, id), e(todos.userId, userId)),
-    })
+    const [existingTodo] = await db
+      .select()
+      .from(schema.todos)
+      .where(and(eq(schema.todos.id, id), eq(schema.todos.userId, userId)))
+      .limit(1)
 
     if (!existingTodo) {
-      return textResult(`Todo with ID ${id} not found or you don't have permission to update it.`)
+      return `Todo with ID ${id} not found or you don't have permission to update it.`
     }
 
-    const [updated] = await db.update(schema.todos)
+    const updatedRows = await db.update(schema.todos)
       .set({
         done: !existingTodo.done,
         updatedAt: new Date(),
@@ -33,6 +36,11 @@ export default defineMcpTool({
       .where(and(eq(schema.todos.id, id), eq(schema.todos.userId, userId)))
       .returning()
 
-    return jsonResult(updated)
+    const updated = updatedRows[0]
+    if (!updated) {
+      return `Todo with ID ${id} could not be updated.`
+    }
+
+    return updated
   },
 })
