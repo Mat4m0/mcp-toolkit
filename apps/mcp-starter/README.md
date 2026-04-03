@@ -27,6 +27,8 @@ pnpm dev
 
 `@nuxtjs/mcp-toolkit` comes from **npm** (`^0.13.3`), so the published package already includes the `server` build — no extra step.
 
+Hook up Cursor, VS Code, or other clients using [Connection](https://mcp-toolkit.nuxt.dev/getting-started/connection) in the docs.
+
 ## Develop inside this monorepo (contributors)
 
 `pnpm dev:prepare` **stubs** the module and removes `dist/runtime/...`, so **`@nuxtjs/mcp-toolkit/server` does not resolve** until you build the module.
