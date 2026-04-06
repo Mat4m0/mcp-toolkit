@@ -9,7 +9,17 @@ import {
 } from '../src/runtime/server/mcp/codemode/types'
 import { createCodemodeTools, disposeCodeMode } from '../src/runtime/server/mcp/codemode/index'
 import { normalizeCode } from '../src/runtime/server/mcp/codemode/executor'
-import type { McpToolDefinition } from '../src/runtime/server/mcp/definitions/tools'
+import type { McpToolDefinition, McpToolDefinitionListItem } from '../src/runtime/server/mcp/definitions/tools'
+import type { McpRequestExtra } from '../src/runtime/server/mcp/definitions/sdk-extra'
+
+function mockMcpExtra(): McpRequestExtra {
+  return {
+    signal: new AbortController().signal,
+    requestId: 0,
+    sendNotification: async () => {},
+    sendRequest: (async () => ({})) as McpRequestExtra['sendRequest'],
+  }
+}
 
 function makeTool(name: string, description: string, inputSchema?: Record<string, z.ZodTypeAny>): McpToolDefinition {
   return {
@@ -309,7 +319,7 @@ describe('createCodemodeTools', () => {
 
 describe('buildDispatchFunctions — structuredContent handling', () => {
   it('returns structuredContent when present, not text content', async () => {
-    const tools: McpToolDefinition[] = [{
+    const tools: McpToolDefinitionListItem[] = [{
       name: 'create-item',
       description: 'Create an item',
       inputSchema: { title: z.string() },
@@ -319,7 +329,7 @@ describe('buildDispatchFunctions — structuredContent handling', () => {
       }),
     }]
     const [codeTool] = createCodemodeTools(tools)
-    const result = await codeTool!.handler!({ code: 'return await codemode.create_item({ title: "Test" })' }, {})
+    const result = await codeTool!.handler!({ code: 'return await codemode.create_item({ title: "Test" })' }, mockMcpExtra())
     const text = (result as { content: { text: string }[] }).content[0]!.text
     const parsed = JSON.parse(text)
 
@@ -327,7 +337,7 @@ describe('buildDispatchFunctions — structuredContent handling', () => {
   })
 
   it('preserves typed fields (booleans, nested objects) from structuredContent', async () => {
-    const tools: McpToolDefinition[] = [{
+    const tools: McpToolDefinitionListItem[] = [{
       name: 'get-status',
       description: 'Get status',
       inputSchema: {},
@@ -337,7 +347,7 @@ describe('buildDispatchFunctions — structuredContent handling', () => {
       }),
     }]
     const [codeTool] = createCodemodeTools(tools)
-    const result = await codeTool!.handler!({ code: 'return await codemode.get_status()' }, {})
+    const result = await codeTool!.handler!({ code: 'return await codemode.get_status()' }, mockMcpExtra())
     const text = (result as { content: { text: string }[] }).content[0]!.text
     const parsed = JSON.parse(text)
 
@@ -347,7 +357,7 @@ describe('buildDispatchFunctions — structuredContent handling', () => {
   })
 
   it('enables operation chaining with structuredContent IDs', async () => {
-    const tools: McpToolDefinition[] = [
+    const tools: McpToolDefinitionListItem[] = [
       {
         name: 'create-item',
         description: 'Create an item',
@@ -361,9 +371,9 @@ describe('buildDispatchFunctions — structuredContent handling', () => {
         name: 'update-item',
         description: 'Update an item',
         inputSchema: { id: z.string(), title: z.string() },
-        handler: async ({ id, title }: { id: string, title: string }) => ({
-          structuredContent: { ok: true, data: { id, title } },
-          content: [{ type: 'text' as const, text: `Updated ${id}` }],
+        handler: async (args: Record<string, unknown>) => ({
+          structuredContent: { ok: true, data: { id: args.id, title: args.title } },
+          content: [{ type: 'text' as const, text: `Updated ${args.id}` }],
         }),
       },
     ]
@@ -374,7 +384,7 @@ describe('buildDispatchFunctions — structuredContent handling', () => {
         const updated = await codemode.update_item({ id: created.data.id, title: "Updated" });
         return updated;
       `,
-    }, {})
+    }, mockMcpExtra())
     const text = (result as { content: { text: string }[] }).content[0]!.text
     const parsed = JSON.parse(text)
 
@@ -382,23 +392,23 @@ describe('buildDispatchFunctions — structuredContent handling', () => {
   })
 
   it('falls back to text content when structuredContent is absent', async () => {
-    const tools: McpToolDefinition[] = [{
+    const tools: McpToolDefinitionListItem[] = [{
       name: 'echo',
       description: 'Echo text',
       inputSchema: { msg: z.string() },
-      handler: async ({ msg }: { msg: string }) => ({
-        content: [{ type: 'text' as const, text: msg }],
+      handler: async (args: Record<string, unknown>) => ({
+        content: [{ type: 'text' as const, text: args.msg as string }],
       }),
     }]
     const [codeTool] = createCodemodeTools(tools)
-    const result = await codeTool!.handler!({ code: 'return await codemode.echo({ msg: "hello" })' }, {})
+    const result = await codeTool!.handler!({ code: 'return await codemode.echo({ msg: "hello" })' }, mockMcpExtra())
     const text = (result as { content: { text: string }[] }).content[0]!.text
 
     expect(text).toBe('hello')
   })
 
   it('handles structuredContent-only result (no content array)', async () => {
-    const tools: McpToolDefinition[] = [{
+    const tools: McpToolDefinitionListItem[] = [{
       name: 'data-only',
       description: 'Data only tool',
       inputSchema: {},
@@ -407,7 +417,7 @@ describe('buildDispatchFunctions — structuredContent handling', () => {
       }),
     }]
     const [codeTool] = createCodemodeTools(tools)
-    const result = await codeTool!.handler!({ code: 'return await codemode.data_only()' }, {})
+    const result = await codeTool!.handler!({ code: 'return await codemode.data_only()' }, mockMcpExtra())
     const text = (result as { content: { text: string }[] }).content[0]!.text
     const parsed = JSON.parse(text)
 
