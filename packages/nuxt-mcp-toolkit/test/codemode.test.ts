@@ -100,7 +100,7 @@ describe('output type generation', () => {
   it('quotes output property names that are not TS-safe identifiers', () => {
     const tools = [makeToolWithOutput('get-meta', 'Meta', {}, {
       'repo-name': z.string(),
-      default: z.boolean(),
+      'default': z.boolean(),
     })]
     const { typeDefinitions } = generateTypesFromTools(tools)
     expect(typeDefinitions).toContain('Promise<{ "repo-name": string; "default": boolean }>')

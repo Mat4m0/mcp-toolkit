@@ -49,7 +49,7 @@ function pascalCase(str: string): string {
 }
 
 function formatTsPropertyKey(key: string): string {
-  return /^[A-Za-z_$][\w$]*$/.test(key) && !RESERVED_WORDS.has(key)
+  return /^[A-Z_$][\w$]*$/i.test(key) && !RESERVED_WORDS.has(key)
     ? key
     : JSON.stringify(key)
 }
