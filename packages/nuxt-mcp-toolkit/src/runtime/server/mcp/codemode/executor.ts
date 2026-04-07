@@ -281,14 +281,14 @@ function getProxyBoilerplate(toolNames: string[], port: number, token: string): 
   }
 
   const proxyMethods = toolNames
-    .map(name => `  ${name}: (input) => rpc('${name}', input)`)
+    .map(name => `  ${name}: (input) => rpc(${JSON.stringify(name)}, input)`)
     .join(',\n')
 
   return `
 async function rpc(toolName, args) {
-  const res = await fetch('http://127.0.0.1:${port}', {
+  const res = await fetch('http://127.0.0.1:' + ${JSON.stringify(String(port))}, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json', 'x-rpc-token': '${token}' },
+    headers: { 'Content-Type': 'application/json', 'x-rpc-token': ${JSON.stringify(token)} },
     body: JSON.stringify({ tool: toolName, args, execId: __execId }),
   });
   const data = JSON.parse(typeof res.text === 'function' ? await res.text() : res.body);
@@ -325,10 +325,10 @@ const __fn = async () => {
 ${cleaned}
 };
 __fn().then(
-  (r) => rpc('${RETURN_TOOL}', r === undefined ? null : r),
-  (e) => console.error('${ERROR_PREFIX}' + (e && e.message ? e.message : String(e)))
+  (r) => rpc(${JSON.stringify(RETURN_TOOL)}, r === undefined ? null : r),
+  (e) => console.error(${JSON.stringify(ERROR_PREFIX)} + (e && e.message ? e.message : String(e)))
 ).catch(
-  (e) => console.error('${ERROR_PREFIX}' + 'Result delivery failed: ' + (e && e.message ? e.message : String(e)))
+  (e) => console.error(${JSON.stringify(ERROR_PREFIX)} + 'Result delivery failed: ' + (e && e.message ? e.message : String(e)))
 );
 `
 }

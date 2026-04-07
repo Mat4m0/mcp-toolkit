@@ -83,8 +83,8 @@ export interface McpHandlerOptions {
   icons?: McpIcon[]
   /**
    * Custom route for the handler.
-   * Only used for custom handlers (not for default handler override in index.ts).
-   * To change the default route, use `mcp.route` in nuxt.config.ts.
+   * @deprecated Custom routes for handlers are not currently supported at runtime.
+   * Handlers are accessed via `/mcp/:handlerName`. Use `mcp.route` in nuxt.config.ts to change the base route.
    */
   route?: string
   browserRedirect?: string

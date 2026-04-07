@@ -53,7 +53,7 @@ function createMockResponse() {
 }
 
 function extractExecMetadata(sandboxCode: string) {
-  const token = sandboxCode.match(/'x-rpc-token': '([^']+)'/)?.[1]
+  const token = sandboxCode.match(/'x-rpc-token':\s*"([^"]+)"/)?.[1]
   const execId = sandboxCode.match(/const __execId = "([^"]+)";/)?.[1]
 
   if (!token || !execId) {

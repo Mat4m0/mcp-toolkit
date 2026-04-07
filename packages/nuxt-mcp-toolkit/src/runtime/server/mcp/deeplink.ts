@@ -58,6 +58,9 @@ export default defineEventHandler((event) => {
     return new Response(null, { status: 302 })
   }
 
+  // Security: serverName flows through encodeURIComponent (inside generateDeeplink),
+  // then through escapeHtmlAttr/escapeJs before reaching HTML/JS contexts.
+  // ideConfig.name in the <title> and <p> is hardcoded, not user-controlled.
   const serverName = (query.name as string) || mcpConfig.name || 'mcp-server'
 
   // Build the MCP server URL (the /mcp endpoint)

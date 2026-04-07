@@ -1,291 +1,580 @@
-# Code Mode Integration — Combined Changeset
+# Work Log
 
-> Branch: `codex/codemode-integration`
-> Base: `0bb110a` (main at time of fork)
-> Files changed: 12 (+1,484 / -516 lines)
+This document describes the full staged change set, including the follow-up fixes from review.
 
-This document describes every change in this branch, why it was made, and how it was validated. The goal is a single consolidated PR that the module author can review with full context instead of piecemeal PRs.
+It answers, for each change:
+- what the issue was
+- why it existed
+- what we wanted to solve
+- what was affected
+- how it was fixed
 
----
+## Scope
 
-## Table of Contents
+The staged changes cover:
+- transport security hardening
+- resource path safety
+- session hardening and lifecycle controls
+- documentation corrections
+- code mode string-safety cleanup
+- API polish and developer ergonomics
+- regression tests for the new behavior
 
-1. [Per-Session RPC Architecture](#1-per-session-rpc-architecture)
-2. [AsyncLocalStorage Context Preservation](#2-asynclocalstorage-context-preservation)
-3. [Resource Limits & Abuse Prevention](#3-resource-limits--abuse-prevention)
-4. [structuredContent Dispatch](#4-structuredcontent-dispatch)
-5. [Tool Error Surfacing in Sandbox](#5-tool-error-surfacing-in-sandbox)
-6. [Typed Output Schemas](#6-typed-output-schemas)
-7. [Type Generation Improvements](#7-type-generation-improvements)
-8. [Description Templates & Progressive Mode](#8-description-templates--progressive-mode)
-9. [Structured Envelope Responses](#9-structured-envelope-responses)
-10. [Handler Reuse Between Registration and Code Mode](#10-handler-reuse-between-registration-and-code-mode)
-11. [Hardening Pass (PR Review Fixes)](#11-hardening-pass-pr-review-fixes)
-12. [Test Coverage](#12-test-coverage)
-13. [Documentation Updates](#13-documentation-updates)
+## 1. Origin Validation
 
----
+### Issue
 
-## 1. Per-Session RPC Architecture
+Streamable HTTP requests did not enforce an origin policy. That left browser-exposed MCP endpoints open to cross-origin request abuse.
 
-**Problem:** The original executor used a singleton RPC server and a singleton V8 runtime. All concurrent `execute()` calls shared the same `fns` map, `onReturn` callback, and RPC token. This meant:
-- Concurrent executions could overwrite each other's dispatch functions
-- A sandbox from execution A could call tools meant for execution B
-- The `onReturn` callback was a single slot — racing executions would lose return values
+### Why the issue existed
 
-**Solution:** Each `execute()` call now creates its own isolated RPC session:
-- Fresh `createServer()` on port 0 (OS-assigned ephemeral port)
-- Unique `execId` (8 random bytes) and `token` (32 random bytes) per execution
-- `ExecutionContext` struct holds per-execution state: `fns`, `onReturn`, `deadlineMs`, `rpcCallCount`
-- The `fns` map is frozen with `Object.freeze()` so sandbox code can't mutate it
-- The sandbox sends `execId` in every RPC call; the server validates it matches the session
-- `ActiveSession` tracking with cleanup on completion, error, or timeout
+There was no centralized transport-level origin validation in either provider. Requests reached transport handling directly.
 
-**Files:** `executor.ts` (complete rewrite of RPC layer)
+### What we wanted to solve
 
----
+We wanted a default-safe policy for browser-facing MCP endpoints:
+- same-origin by default
+- explicit opt-out via config
+- explicit allowlist support when cross-origin is intentional
 
-## 2. AsyncLocalStorage Context Preservation
+### What was affected
 
-**Problem:** Nitro uses `AsyncLocalStorage` to carry per-request context (H3 event, auth, etc.). When Code Mode dispatches a tool call via HTTP RPC, the async context is lost — the RPC handler runs in the HTTP server's context, not the original request's.
+- Node transport
+- Cloudflare transport
+- module configuration
+- security documentation and tests
 
-**Solution:** On entry to `execute()`, we capture the current async context via `AsyncLocalStorage.snapshot()`. Every tool dispatch is wrapped through `restoreContext()`, which re-enters the original request's async context before calling the tool handler. This means tools called from sandbox code have access to the same `useEvent()`, auth state, etc. as if called directly.
+### How we fixed it
 
-A runtime check rejects Node.js < 18.16.0 where `snapshot()` is unavailable, returning a clear error message instead of crashing.
+We added `McpSecurityConfig` with `allowedOrigins` in:
+- `packages/nuxt-mcp-toolkit/src/runtime/server/mcp/config.ts`
+- `packages/nuxt-mcp-toolkit/src/module.ts`
 
-**Files:** `executor.ts` (lines 386-395, 437-448, 198, 216)
+We added `validateOrigin()` in:
+- `packages/nuxt-mcp-toolkit/src/runtime/server/mcp/providers/security.ts`
 
----
+We now call it at the top of both providers:
+- `packages/nuxt-mcp-toolkit/src/runtime/server/mcp/providers/node.ts`
+- `packages/nuxt-mcp-toolkit/src/runtime/server/mcp/providers/cloudflare.ts`
 
-## 3. Resource Limits & Abuse Prevention
+The important review fix was making the comparison use the full normalized origin, not just the host. The earlier host-only check would have accepted `http://example.com` against an HTTPS deployment on the same host, which is not same-origin.
 
-**Problem:** The original executor had no protection against:
-- Oversized RPC request bodies (memory exhaustion)
-- Infinite tool call loops
-- Runaway wall-clock time (sandbox waiting forever on slow tools)
-- Oversized tool responses
+Current behavior:
+- no `Origin` header: allowed
+- `allowedOrigins === '*'`: allowed
+- explicit allowlist: allowed only when normalized origins match
+- default mode: allowed only when `Origin` matches `getRequestURL(event).origin`
+- rejected requests return `403`
 
-**Solution:** Added configurable limits with sensible defaults:
+### Verification
 
-| Limit | Default | Config Key | Enforcement |
-|-------|---------|------------|-------------|
-| RPC request body | 1 MB | `maxRequestBodyBytes` | HTTP 413, streaming byte count |
-| Tool calls per execution | 200 | `maxToolCalls` | HTTP 429, counter on `ExecutionContext` |
-| Wall-clock timeout | 60s | `wallTimeLimitMs` | `setTimeout` → `runtime.dispose()` |
-| Tool response size | 1 MB | `maxToolResponseSize` | Truncation (same strategy as `maxResultSize`) |
+Added regression coverage in:
+- `packages/nuxt-mcp-toolkit/test/sessions.test.ts`
 
-The wall-clock timeout is separate from the V8 CPU time limit. CPU time only counts isolate execution; wall time caps total elapsed time including host-side tool calls. On timeout, the runtime is forcefully disposed and the sandbox gets a clear error.
+Test added:
+- rejects cross-scheme origins even on the same host
 
-Error messages returned to sandbox/client are sanitized: file paths are replaced with `[path]`, stack traces are stripped, and messages are truncated to 500 chars. Full errors are logged server-side with `console.error('[nuxt-mcp-toolkit] ...')`.
+## 2. Path Traversal Protection for File Resources
 
-**Files:** `executor.ts`, `types.ts` (new options), `8.code-mode.md` (docs)
+### Issue
 
----
+File-based MCP resources could resolve paths outside the project root.
 
-## 4. structuredContent Dispatch
+### Why the issue existed
 
-**Problem:** When a tool handler returned `structuredContent` (the MCP spec's typed data channel), Code Mode ignored it and fell through to extracting text from `content[].text`. This silently lost IDs, booleans, nested objects — breaking operation chaining where a returned ID is needed for follow-up calls.
+The implementation resolved `resource.file` with `resolve(process.cwd(), resource.file)` but did not verify that the resulting path stayed within the project root.
 
-**Solution:** `normalizeDispatchResult()` now checks `structuredContent` first:
-1. If `rawResult.structuredContent != null` → return it directly (preserves typed data)
-2. If `rawResult.isError` → convert to `CodeModeToolError` sentinel (see #5)
-3. If `rawResult.content` has text items → return joined text (no JSON.parse — intentional, avoids ambiguity)
-4. Plain objects/primitives pass through unchanged
+### What we wanted to solve
 
-The function also uses `isCallToolResult()` to distinguish MCP results from plain objects returned by handlers. This duck-type check was tightened: `isError` alone no longer matches unless it's a boolean (prevents false positives from objects that happen to have an `isError` property).
+We wanted file resources to stay constrained to the project tree and fail fast if a definition attempted to escape it.
 
-**Files:** `index.ts` (normalizeDispatchResult, extractTextContent), `results.ts` (isCallToolResult)
+### What was affected
 
----
+- file-based resource definitions
+- projects exposing local files as MCP resources
 
-## 5. Tool Error Surfacing in Sandbox
+### How we fixed it
 
-**Problem:** Tool errors (`isError: true` results or thrown exceptions) were returned as plain strings to sandbox code, making them indistinguishable from successful results. `try/catch` never fired, and structured error details from `structuredContent` were lost.
+In:
+- `packages/nuxt-mcp-toolkit/src/runtime/server/mcp/definitions/resources.ts`
 
-**Solution:** Tool errors are now wrapped as a sentinel object with a namespaced key:
+We now:
+- compute `projectRoot`
+- resolve `resource.file` against it
+- reject the resource if the resolved path does not stay under `projectRoot + sep`
 
-```ts
-{
-  __mcp_toolkit_error__: true,
-  message: "Permission denied",
-  tool: "delete_item",
-  details: { /* structuredContent if available */ }
-}
+That blocks `../` traversal in resource definitions.
+
+## 3. Session ID Validation
+
+### Issue
+
+Malformed session IDs were treated as missing sessions instead of invalid input.
+
+### Why the issue existed
+
+The transport accepted any string in `MCP-Session-Id` and only checked whether that string existed in the session map.
+
+### What we wanted to solve
+
+We wanted stricter request validation and clearer failure modes:
+- malformed ID => bad request
+- well-formed but unknown ID => missing session
+
+### What was affected
+
+- Node transport
+- session composable safety
+- test expectations
+
+### How we fixed it
+
+We added `isValidSessionId()` in:
+- `packages/nuxt-mcp-toolkit/src/runtime/server/mcp/providers/security.ts`
+
+We now validate UUID v4 format in:
+- `packages/nuxt-mcp-toolkit/src/runtime/server/mcp/providers/node.ts`
+- `packages/nuxt-mcp-toolkit/src/runtime/server/mcp/session.ts`
+
+Behavior now:
+- malformed ID => `400`
+- unknown but well-formed ID => `404`
+
+### Verification
+
+Updated coverage in:
+- `packages/nuxt-mcp-toolkit/test/sessions.test.ts`
+
+## 4. Session Invalidation
+
+### Issue
+
+There were two real problems in the original invalidation approach:
+
+1. It was coupled to the Node provider internals.
+2. It could break the current middleware request by deleting the active session before transport handling ran.
+
+### Why the issue existed
+
+The first draft imported session deletion logic directly from the Node provider into the shared session composable. That made invalidation depend on the Node provider's in-memory map.
+
+It also deleted the session immediately. But middleware runs before transport handling. So deleting the session in middleware could cause the current request to fall through into `Session not found`.
+
+### What we wanted to solve
+
+We wanted:
+- a provider-neutral invalidation mechanism
+- the current request to complete cleanly
+- the next request to fail and force client re-initialization
+- behavior that also works on Cloudflare, even though its transport lifecycle differs
+
+### What was affected
+
+- `invalidateMcpSession()`
+- Node session lifecycle
+- Cloudflare session behavior
+- docs for auth/session changes
+- session regression tests
+
+### How we fixed it
+
+We replaced direct provider coupling with shared invalidation state in:
+- `packages/nuxt-mcp-toolkit/src/runtime/server/mcp/session-state.ts`
+
+This helper provides:
+- request-time invalidation flagging on the event
+- persistent invalidation metadata in `mcp:sessions-meta`
+
+We changed:
+- `packages/nuxt-mcp-toolkit/src/runtime/server/mcp/session.ts`
+
+`invalidateMcpSession()` now requests invalidation instead of deleting the session immediately.
+
+#### Node behavior
+
+In:
+- `packages/nuxt-mcp-toolkit/src/runtime/server/mcp/providers/node.ts`
+
+We now:
+- check for invalidated sessions before using them
+- mark a session invalidated if middleware requested it
+- defer actual deletion until the current response closes
+- reject the next request with `404 Session not found`
+
+We also moved cleanup ordering so session map/storage cleanup happens before closing the transport, which avoids shutdown recursion.
+
+#### Cloudflare behavior
+
+In:
+- `packages/nuxt-mcp-toolkit/src/runtime/server/mcp/providers/cloudflare.ts`
+
+We now:
+- reject already-invalidated session IDs with `404`
+- mark the session invalidated when middleware requests it
+
+Because Cloudflare uses `agents/mcp`, we do not own the same live transport/session map there. So the provider-neutral fix is metadata-based: it blocks continued use of the session without trying to reach into non-shared provider internals.
+
+#### Storage
+
+In:
+- `packages/nuxt-mcp-toolkit/src/module.ts`
+
+We added:
+- `mcp:sessions-meta`
+
+This ensures the invalidation metadata has a storage backend whenever sessions are enabled.
+
+### Result
+
+Current semantics:
+- `invalidateMcpSession()` during middleware does not break the current request
+- the current request can still complete
+- the session is marked for teardown/invalidation
+- the next request using the same session ID is rejected
+
+### Verification
+
+Added fixture middleware in:
+- `packages/nuxt-mcp-toolkit/test/fixtures/sessions/server/mcp/index.ts`
+
+Added regression coverage in:
+- `packages/nuxt-mcp-toolkit/test/sessions.test.ts`
+
+Test added:
+- invalidates the session after the current middleware request completes
+
+## 5. Session Cap
+
+### Issue
+
+The server had no upper bound on concurrent sessions.
+
+### Why the issue existed
+
+Session creation was allowed whenever a request initialized a session. There was no admission control.
+
+### What we wanted to solve
+
+We wanted a simple guard against unbounded session growth and memory pressure.
+
+### What was affected
+
+- session creation on Node
+- configuration surface
+- docs
+
+### How we fixed it
+
+In:
+- `packages/nuxt-mcp-toolkit/src/runtime/server/mcp/config.ts`
+- `packages/nuxt-mcp-toolkit/src/module.ts`
+- `apps/docs/content/1.getting-started/3.configuration.md`
+
+We added:
+- `sessions.maxSessions`
+- default value `1000`
+
+In:
+- `packages/nuxt-mcp-toolkit/src/runtime/server/mcp/providers/node.ts`
+
+We reject new session creation when the limit is reached with:
+- status `503`
+- `Retry-After: 60`
+
+## 6. Session Continuity vs Resumability
+
+### Issue
+
+The documentation used “resumability” in places where the implementation only provided session continuity.
+
+### Why the issue existed
+
+The docs blurred two different concepts:
+- continuing a session using the same `MCP-Session-Id`
+- replaying missed SSE events after reconnect
+
+Only the first exists in the current implementation.
+
+### What we wanted to solve
+
+We wanted the docs to describe the real behavior precisely and not over-claim event replay support.
+
+### What was affected
+
+- configuration docs
+- sessions guide
+- session API wording in the module options
+
+### How we fixed it
+
+We replaced “resumability” with “session continuity” and added a specific explanation in:
+- `apps/docs/content/1.getting-started/3.configuration.md`
+- `apps/docs/content/3.advanced/6.sessions.md`
+- `packages/nuxt-mcp-toolkit/src/module.ts`
+
+We also added an explicit note that true resumability would require event replay infrastructure such as an event store.
+
+## 7. Authentication Docs: Soft vs Strict Auth
+
+### Issue
+
+The docs previously treated `401` as something that should broadly not be used.
+
+### Why the issue existed
+
+That was too absolute. It is true for mixed-access servers without OAuth endpoints, but it is not correct as a blanket rule for protected-only servers with OAuth discovery.
+
+### What we wanted to solve
+
+We wanted auth guidance that matches the protocol and common deployment modes.
+
+### What was affected
+
+- authentication example docs
+
+### How we fixed it
+
+In:
+- `apps/docs/content/4.examples/1.authentication.md`
+
+We replaced the blanket advice with two documented approaches:
+- soft auth for mixed-access servers
+- strict auth with `401` and `WWW-Authenticate: Bearer` for protected-only servers with OAuth endpoints
+
+## 8. Code Mode RPC Token and String Interpolation Hardening
+
+### Issue
+
+Sandbox code generation used raw string interpolation for values inserted into generated JavaScript.
+
+### Why the issue existed
+
+The generated proxy boilerplate embedded tool names, tokens, ports, and error prefixes using quoted interpolation. That is fragile if embedded values contain characters that need JS string escaping.
+
+### What we wanted to solve
+
+We wanted generated code to be syntactically safe regardless of string contents.
+
+### What was affected
+
+- code mode sandbox boilerplate
+- related test regex
+
+### How we fixed it
+
+In:
+- `packages/nuxt-mcp-toolkit/src/runtime/server/mcp/codemode/executor.ts`
+
+We replaced direct interpolation with `JSON.stringify(...)` for:
+- tool names
+- RPC token
+- port string
+- return tool name
+- error prefix
+
+In:
+- `packages/nuxt-mcp-toolkit/test/codemode-executor.test.ts`
+
+We updated the token extraction regex to match the new generated form.
+
+## 9. `useMcpLogger()` Composable
+
+### Issue
+
+There was no first-class helper for sending MCP logging notifications from request handlers.
+
+### Why the issue existed
+
+The runtime exposed `useMcpServer()` for mutation but did not provide a dedicated logging composable even though the underlying server supports logging notifications.
+
+### What we wanted to solve
+
+We wanted a small, direct helper for MCP-spec logging notifications.
+
+### What was affected
+
+- server runtime ergonomics
+- auto-imports
+
+### How we fixed it
+
+We added:
+- `packages/nuxt-mcp-toolkit/src/runtime/server/mcp/logging.ts`
+
+This exposes:
+- `debug`
+- `info`
+- `notice`
+- `warn`
+- `error`
+- `critical`
+- `alert`
+- `emergency`
+
+It reads the active MCP server from request context and sends `notifications/message`.
+
+We also auto-imported it in:
+- `packages/nuxt-mcp-toolkit/src/module.ts`
+
+## 10. Handler `route` Deprecation Clarification
+
+### Issue
+
+The `route` property on handler definitions implied support that the runtime does not actually implement.
+
+### Why the issue existed
+
+The JSDoc suggested the field was meaningful for custom handlers, but handlers are actually routed as `/mcp/:handlerName`.
+
+### What we wanted to solve
+
+We wanted the public type surface to stop implying unsupported behavior.
+
+### What was affected
+
+- handler type docs
+- developer expectations
+
+### How we fixed it
+
+In:
+- `packages/nuxt-mcp-toolkit/src/runtime/server/mcp/definitions/handlers.ts`
+
+We marked `route` as deprecated and clarified:
+- custom routes are not supported at runtime
+- `mcp.route` changes the base route instead
+
+## 11. Deeplink Escaping Documentation
+
+### Issue
+
+The deeplink handler already had escaping, but the security reasoning was implicit.
+
+### Why the issue existed
+
+Without an explicit comment, future changes could unintentionally weaken the escaping chain.
+
+### What we wanted to solve
+
+We wanted to document the trust boundary and the escaping path for maintainers.
+
+### What was affected
+
+- deeplink handler maintainability
+
+### How we fixed it
+
+In:
+- `packages/nuxt-mcp-toolkit/src/runtime/server/mcp/deeplink.ts`
+
+We added a comment explaining:
+- `serverName` passes through `encodeURIComponent`
+- then through HTML/JS escaping
+- `ideConfig.name` is hardcoded
+
+## 12. Session Storage Hardening
+
+### Issue
+
+Session invalidation metadata needed a durable place to live alongside session data.
+
+### Why the issue existed
+
+The original session storage only tracked session-scoped data, not invalidation metadata.
+
+### What we wanted to solve
+
+We wanted invalidation to work consistently across request boundaries and across providers without introducing new transport-specific coupling.
+
+### What was affected
+
+- session lifecycle bookkeeping
+
+### How we fixed it
+
+We introduced:
+- `mcp:sessions-meta:<sessionId>`
+
+and clean it up when sessions are removed.
+
+Files involved:
+- `packages/nuxt-mcp-toolkit/src/module.ts`
+- `packages/nuxt-mcp-toolkit/src/runtime/server/mcp/session-state.ts`
+- `packages/nuxt-mcp-toolkit/src/runtime/server/mcp/providers/node.ts`
+- `packages/nuxt-mcp-toolkit/src/runtime/server/mcp/providers/cloudflare.ts`
+
+## 13. Test Additions and Changes
+
+### What changed
+
+In:
+- `packages/nuxt-mcp-toolkit/test/sessions.test.ts`
+- `packages/nuxt-mcp-toolkit/test/codemode-executor.test.ts`
+- `packages/nuxt-mcp-toolkit/test/fixtures/sessions/server/mcp/index.ts`
+
+We added or updated coverage for:
+- malformed session ID returns `400`
+- cross-scheme origin rejection
+- deferred session invalidation behavior
+- code mode token extraction under JSON-stringified output
+
+### Why this mattered
+
+These tests lock in the behavior that was previously missing or incorrect and prevent regression in the most security-sensitive parts of the change set.
+
+## 14. Files Changed
+
+### Runtime / module
+
+- `packages/nuxt-mcp-toolkit/src/module.ts`
+- `packages/nuxt-mcp-toolkit/src/runtime/server/mcp/config.ts`
+- `packages/nuxt-mcp-toolkit/src/runtime/server/mcp/logging.ts`
+- `packages/nuxt-mcp-toolkit/src/runtime/server/mcp/session.ts`
+- `packages/nuxt-mcp-toolkit/src/runtime/server/mcp/session-state.ts`
+- `packages/nuxt-mcp-toolkit/src/runtime/server/mcp/providers/node.ts`
+- `packages/nuxt-mcp-toolkit/src/runtime/server/mcp/providers/cloudflare.ts`
+- `packages/nuxt-mcp-toolkit/src/runtime/server/mcp/providers/security.ts`
+- `packages/nuxt-mcp-toolkit/src/runtime/server/mcp/definitions/resources.ts`
+- `packages/nuxt-mcp-toolkit/src/runtime/server/mcp/definitions/handlers.ts`
+- `packages/nuxt-mcp-toolkit/src/runtime/server/mcp/deeplink.ts`
+- `packages/nuxt-mcp-toolkit/src/runtime/server/mcp/codemode/executor.ts`
+
+### Docs
+
+- `apps/docs/content/1.getting-started/3.configuration.md`
+- `apps/docs/content/3.advanced/6.sessions.md`
+- `apps/docs/content/4.examples/1.authentication.md`
+
+### Tests / fixtures
+
+- `packages/nuxt-mcp-toolkit/test/sessions.test.ts`
+- `packages/nuxt-mcp-toolkit/test/codemode-executor.test.ts`
+- `packages/nuxt-mcp-toolkit/test/fixtures/sessions/server/mcp/index.ts`
+
+## 15. Verification Performed
+
+Ran:
+
+```bash
+pnpm --filter @nuxtjs/mcp-toolkit exec vitest run test/sessions.test.ts
+pnpm --filter @nuxtjs/mcp-toolkit exec vue-tsc --noEmit
 ```
 
-The sandbox proxy code detects this sentinel and throws a structured `Error` with `.tool`, `.isToolError`, and `.details` properties. This lets sandbox code use `try/catch` to handle tool errors with full context.
+Results:
+- session regression suite passed
+- typecheck passed
 
-The sentinel key is namespaced (`__mcp_toolkit_error__`) rather than generic (`__toolError`) to avoid collisions with legitimate tool return values. Similarly, the stderr error prefix is `__MCP_EXEC_ERR__` rather than `__ERROR__`.
+## 16. Net Outcome
 
-**Files:** `index.ts` (toToolError, CodeModeToolError), `executor.ts` (proxy boilerplate)
-
----
-
-## 6. Typed Output Schemas
-
-**Problem:** All Code Mode tools returned `Promise<unknown>` regardless of whether an `outputSchema` was defined. The LLM had no type information about what to expect back.
-
-**Solution:** When a tool definition includes `outputSchema`, the type generator now emits typed return values:
-- Small schemas (<=3 primitive fields) are inlined: `Promise<{ id: string; ok: boolean }>`
-- Larger schemas get named interfaces: `Promise<GetReportOutput>`
-
-This reuses the same `generateSchemaTypeInfo()` helper used for input schemas, extracted from the duplicated inline logic.
-
-**Files:** `types.ts` (generateSchemaTypeInfo, generateToolTypeInfo output handling)
-
----
-
-## 7. Type Generation Improvements
-
-Several improvements to the TypeScript type generation for sandbox code:
-
-- **Property key escaping:** Keys with special characters or reserved words are now properly quoted using `JSON.stringify()` via `formatTsPropertyKey()`. Before: `my-key?: string` (invalid TS). After: `"my-key"?: string`.
-- **Enum value escaping:** Enum strings containing quotes or backslashes are now escaped with `JSON.stringify(v)` instead of template literals. Before: `"he said "hello""` (broken). After: `"he said \"hello\""`.
-- **Name collision detection:** `buildToolNameMap()` now throws if two tools sanitize to the same name (e.g., `get-user` and `get_user` both become `get_user`), instead of silently overwriting.
-- **Description stripping:** `declare const codemode` block no longer includes `// description` comments inline, keeping the type block clean. Descriptions remain in catalog signatures for progressive mode.
-
-**Files:** `types.ts`
-
----
-
-## 8. Description Templates & Progressive Mode
-
-**Problem:** The code tool descriptions were overly verbose with multi-paragraph instructions about combining sequential/parallel/conditional logic. This wastes context window for every tool call.
-
-**Solution:**
-- Simplified templates to essential information: what the tool does, how to write code, available types
-- Added `{{example}}` placeholder support alongside existing `{{types}}` and `{{count}}`
-- Example blocks are automatically omitted when there are >10 tools (they become noise at that scale)
-- Collapsed excessive newlines in template output
-- Progressive mode gets its own concise example showing the search→code workflow
-
-**Files:** `index.ts` (templates, applyDescriptionTemplate), `types.ts` (CodeModeOptions.description docs)
-
----
-
-## 9. Structured Envelope Responses
-
-**Problem:** The code tool returned only text content — no structured data for programmatic consumption by MCP clients.
-
-**Solution:** The code tool now returns both `structuredContent` and `content`:
-
-```ts
-{
-  isError: false,
-  structuredContent: {
-    ok: true,
-    result: { id: "abc123" },
-    durationMs: 142,
-    logs: ["[stdout] Processing..."]
-  },
-  content: [{ type: "text", text: "..." }]  // human-readable fallback
-}
-```
-
-- `CodeToolEnvelope` is a discriminated union (`ok: true | false`) preventing impossible states (simultaneous result + error)
-- `ExecuteResult` is also a discriminated union — `result` and `error` are mutually exclusive at the type level
-- `durationMs` tracks wall-clock execution time
-- `outputSchema` is declared on the code tool definition so MCP clients can validate responses
-
-**Files:** `index.ts` (CodeToolEnvelope, createCodeToolEnvelope, formatSuccessContent), `types.ts` (ExecuteResult)
-
----
-
-## 10. Handler Reuse Between Registration and Code Mode
-
-**Problem:** Code Mode reimplemented tool handler invocation: it manually resolved tool names, manually checked for `inputSchema`, and called handlers differently than `registerToolFromDefinition()`. This meant cache wrappers, error normalization, and future middleware would only apply to registered tools, not code mode dispatches.
-
-**Solution:** Extracted shared utilities from `registerToolFromDefinition()`:
-- `resolveToolDefinitionName(tool)` — applies `enrichNameTitle` to get the canonical name
-- `createWrappedToolHandler(tool)` — applies cache wrappers and returns the handler
-- `invokeWrappedToolHandler(tool, handler, input, extra)` — calls the handler with the correct argument shape (input+extra vs. extra-only based on whether `inputSchema` exists)
-
-Code Mode now uses these same functions, so cache, auth, and any future middleware apply consistently whether a tool is called via MCP protocol or via sandbox code.
-
-The `buildDispatchFunctions()` helper is now exported (used by tests) and accepts `McpRequestExtra`, which gets passed through to tool handlers so they have access to `requestId`, `signal`, `sendNotification`, etc.
-
-**Files:** `tools.ts` (resolveToolDefinitionName, createWrappedToolHandler, invokeWrappedToolHandler), `index.ts` (buildDispatchEntries, buildDispatchFunctionsFromEntries)
-
----
-
-## 11. Hardening Pass (PR Review Fixes)
-
-After the feature work, a comprehensive PR review identified issues that were fixed:
-
-### Error sentinel spoofability
-Changed sentinel key from `__toolError` to `__mcp_toolkit_error__` and stderr prefix from `__ERROR__` to `__MCP_EXEC_ERR__` to avoid collisions with legitimate tool return values or user code logging.
-
-### Empty catch blocks
-Four truly empty `catch {}` blocks in cleanup paths (server.close, runtime.dispose, wall-timer dispose) now log warnings with `console.warn('[nuxt-mcp-toolkit] ...')` and context about which operation failed.
-
-### Unhandled promise rejection
-`void handleRpcRequest(...)` had no catch handler. If the inner try/catch failed AND `sendJson` also threw, the rejection escaped. Added `.catch(() => { if (!res.headersSent) res.destroy() })` as a safety net.
-
-### Missing server-side error logging
-The outer `catch` in `execute()` sanitized errors before returning them but never logged the raw error. Added `console.error('[nuxt-mcp-toolkit] Execution error:', error)` before sanitization so infrastructure errors are visible in server logs.
-
-### isCallToolResult false positives
-`isError` alone was enough to match `isCallToolResult()`. Now requires `typeof isError === 'boolean'` — objects with incidental string/number `isError` properties aren't misrouted.
-
-### Dead proxy cache
-`cachedProxyKey`/`cachedProxyCode` module-level variables never hit because each execution creates a new port+token. Removed entirely.
-
-### Impossible type states
-`ExecuteResult` was `{ result: unknown, error?: string }` — both could be set. Now a discriminated union where `result` and `error` are mutually exclusive. Same for `CodeToolEnvelope` with `ok` as discriminant.
-
-### disposeCodeMode error swallowing
-`.catch(() => {})` replaced with `.catch(error => console.warn(...))`.
-
-**Files:** `executor.ts`, `index.ts`, `types.ts`, `results.ts`
-
----
-
-## 12. Test Coverage
-
-### codemode.test.ts (was ~180 lines, now ~380 lines)
-- Type generation: declarations, output types, name collision detection
-- Tool catalog: signatures, search formatting
-- `createCodemodeTools`: standard mode, progressive mode, example block omission, outputSchema
-- `buildDispatchFunctions`: structuredContent preference, plain text preservation, native object passthrough, thrown error → sentinel conversion, MCP extra propagation
-- Code tool envelope: structured success/error responses
-- `normalizeCode`: markdown fence stripping, arrow function unwrapping, export default removal
-- `isCallToolResult`: content arrays, structuredContent, boolean isError, non-boolean isError rejection, plain object rejection
-- Enum escaping: quotes, backslashes in enum values
-- `isError` CallToolResult → tool error sentinel flow
-
-### codemode-executor.test.ts (new, ~400 lines)
-- Concurrency: parallel executions with no cross-talk
-- RPC token validation: wrong token → 403
-- Execution ID validation: wrong execId → 400
-- Request body limits: oversized payload → 413
-- Tool call quota: exceeding maxToolCalls → 429
-- Tool response truncation: arrays, objects, primitives
-- Wall-clock timeout behavior
-- Cleanup verification after success/error/timeout
-
----
-
-## 13. Documentation Updates
-
-- `8.code-mode.md`: Added new config options (`maxRequestBodyBytes`, `maxToolResponseSize`, `wallTimeLimitMs`, `maxToolCalls`) to the configuration reference and resource limits table. Added "Error Sanitization" section. Added Node.js >=18.16.0 callout.
-- `handlers.ts`: Expanded `experimental_codeMode` JSDoc with config keys and Node.js requirement.
-- `2.installation.md`: Minor addition (context for secure-exec requirement).
-
----
-
-## Files Changed Summary
-
-| File | What changed |
-|------|-------------|
-| `executor.ts` | Rewritten: per-session RPC, AsyncLocalStorage, resource limits, error handling |
-| `index.ts` | Rewritten: structuredContent dispatch, tool error sentinels, envelope responses, handler reuse |
-| `types.ts` | Extended: output schemas, property key escaping, enum escaping, discriminated unions, new options |
-| `results.ts` | Exported `isCallToolResult`, tightened `isError` check |
-| `tools.ts` | Extracted `resolveToolDefinitionName`, `createWrappedToolHandler`, `invokeWrappedToolHandler` |
-| `handlers.ts` | JSDoc update for `experimental_codeMode` |
-| `executor.cloudflare.ts` | Re-export alignment |
-| `codemode.test.ts` | Expanded from ~180 to ~380 lines |
-| `codemode-executor.test.ts` | New: ~400 lines of executor integration tests |
-| `8.code-mode.md` | New config options, resource limits table, error sanitization section |
-| `2.installation.md` | Minor addition |
-| `5.handlers.md` | Minor addition |
+This staged change set now does the following:
+- adds configurable origin validation with a safe default
+- closes the resource path traversal hole
+- validates session IDs explicitly
+- caps session growth
+- makes session invalidation portable and safe for the current request
+- documents auth behavior more accurately
+- documents session continuity vs true resumability correctly
+- hardens generated code interpolation in code mode
+- exposes MCP logging as a composable
+- clarifies unsupported handler routing behavior
+- adds targeted regression coverage for the critical paths
