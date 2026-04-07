@@ -388,7 +388,7 @@ describe('enum escaping in type generation', () => {
       name: 'get-quote',
       description: 'Get a quote',
       inputSchema: {
-        style: z.enum(['he said "hello"', "it's fine", 'back\\slash']),
+        style: z.enum(['he said "hello"', 'it\'s fine', 'back\\slash']),
       },
       handler: async () => 'ok',
     }]

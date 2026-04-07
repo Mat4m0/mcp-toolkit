@@ -29,9 +29,9 @@ interface CodeModeToolError {
   details?: unknown
 }
 
-type CodeToolEnvelope =
-  | { ok: true, result?: unknown, error?: undefined, logs?: string[], durationMs: number }
-  | { ok: false, result?: undefined, error: string, logs?: string[], durationMs: number }
+type CodeToolEnvelope
+  = | { ok: true, result?: unknown, error?: undefined, logs?: string[], durationMs: number }
+    | { ok: false, result?: undefined, error: string, logs?: string[], durationMs: number }
 
 interface DispatchToolEntry {
   originalName: string

@@ -31,9 +31,9 @@ export interface CodeModeOptions {
   description?: string
 }
 
-export type ExecuteResult =
-  | { result: unknown, error?: undefined, logs: string[], durationMs: number }
-  | { result?: undefined, error: string, logs: string[], durationMs: number }
+export type ExecuteResult
+  = | { result: unknown, error?: undefined, logs: string[], durationMs: number }
+    | { result?: undefined, error: string, logs: string[], durationMs: number }
 
 const RESERVED_WORDS = new Set([
   'break', 'case', 'catch', 'continue', 'debugger', 'default', 'delete', 'do',
