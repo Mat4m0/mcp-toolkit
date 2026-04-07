@@ -34,6 +34,7 @@ export interface ExecuteResult {
   result: unknown
   error?: string
   logs: string[]
+  durationMs: number
 }
 
 const RESERVED_WORDS = new Set([
@@ -78,7 +79,7 @@ function jsonSchemaPropertyToTs(prop: Record<string, unknown>): string {
     const required = (prop.required as string[]) || []
     const fields = Object.entries(props).map(([key, value]) => {
       const opt = required.includes(key) ? '' : '?'
-      return `${key}${opt}: ${jsonSchemaPropertyToTs(value)}`
+      return `${formatTsPropertyKey(key)}${opt}: ${jsonSchemaPropertyToTs(value)}`
     })
     return `{ ${fields.join('; ')} }`
   }
@@ -228,6 +229,12 @@ function generateToolTypeInfo(tool: McpToolDefinition): ToolTypeInfo {
 function buildToolNameMap(infos: ToolTypeInfo[]): Map<string, string> {
   const map = new Map<string, string>()
   for (const info of infos) {
+    const existing = map.get(info.sanitizedName)
+    if (existing && existing !== info.originalName) {
+      throw new Error(
+        `[nuxt-mcp-toolkit] Code Mode tool name collision: "${existing}" and "${info.originalName}" both sanitize to "${info.sanitizedName}". Rename one of the tools.`,
+      )
+    }
     map.set(info.sanitizedName, info.originalName)
   }
   return map

@@ -9,7 +9,7 @@ import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js'
  */
 export type McpToolCallbackResult = CallToolResult | string | number | boolean | Record<string, unknown> | unknown[]
 
-function isCallToolResult(value: object): value is CallToolResult {
+export function isCallToolResult(value: object): value is CallToolResult {
   return (
     ('content' in value && Array.isArray((value as CallToolResult).content))
     || 'structuredContent' in value
