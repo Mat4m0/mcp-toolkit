@@ -155,6 +155,8 @@ export default createMcpTransportHandler(async (createServer, event) => {
         clearSessionInvalidation(sid),
       ])
     }
+    // Do not call server.close() here: this runs during transport shutdown;
+    // explicit cleanup uses deleteSession() (invalidation, idle expiry, duplicate guard).
   }
 
   await server.connect(transport)
