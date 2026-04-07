@@ -77,12 +77,12 @@ describe('sanitizeToolName', () => {
 })
 
 describe('generateTypesFromTools', () => {
-  it('generates codemode declarations without inline description comments', () => {
+  it('generates codemode declarations with inline description comments', () => {
     const { typeDefinitions, toolNameMap } = generateTypesFromTools(sampleTools)
 
     expect(typeDefinitions).toContain('declare const codemode')
     expect(typeDefinitions).toContain('get_user')
-    expect(typeDefinitions).not.toContain('// Get a user by ID')
+    expect(typeDefinitions).toContain('// Get a user by ID')
     expect(toolNameMap.get('get_user')).toBe('get-user')
   })
 
@@ -103,11 +103,15 @@ describe('generateTypesFromTools', () => {
     expect(typeDefinitions).toContain('Promise<GetReportOutput>')
   })
 
-  it('throws on sanitized name collisions', () => {
-    expect(() => generateTypesFromTools([
+  it('warns on sanitized name collisions and keeps last tool', () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const { toolNameMap } = generateTypesFromTools([
       makeTool('get-user', 'A'),
       makeTool('get_user', 'B'),
-    ])).toThrow(/both sanitize to "get_user"/)
+    ])
+    expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('both sanitize to "get_user"'))
+    expect(toolNameMap.get('get_user')).toBe('get_user') // last wins
+    warnSpy.mockRestore()
   })
 })
 
@@ -249,6 +253,45 @@ describe('buildDispatchFunctions', () => {
       sameSignal: true,
     })
   })
+
+  it('passes extra as second argument for empty-schema tools', async () => {
+    const extra = mockMcpExtra()
+    const tools: McpToolDefinitionListItem[] = [{
+      name: 'empty-schema-tool',
+      description: 'Tool with empty schema',
+      inputSchema: {},
+      handler: async (_args: Record<string, never>, receivedExtra: McpRequestExtra) => ({
+        hasExtra: receivedExtra !== undefined,
+        requestId: receivedExtra.requestId,
+      }),
+    }]
+    const { toolNameMap } = generateTypesFromTools(tools)
+    const fns = buildDispatchFunctions(tools, toolNameMap, extra)
+
+    await expect(fns.empty_schema_tool!({})).resolves.toEqual({
+      hasExtra: true,
+      requestId: 1,
+    })
+  })
+
+  it('passes extra as sole argument for undefined-schema tools', async () => {
+    const extra = mockMcpExtra()
+    const tools: McpToolDefinitionListItem[] = [{
+      name: 'no-schema-tool',
+      description: 'Tool without schema',
+      handler: async (receivedExtra: McpRequestExtra) => ({
+        hasExtra: receivedExtra !== undefined,
+        requestId: receivedExtra.requestId,
+      }),
+    }]
+    const { toolNameMap } = generateTypesFromTools(tools)
+    const fns = buildDispatchFunctions(tools, toolNameMap, extra)
+
+    await expect(fns.no_schema_tool!({})).resolves.toEqual({
+      hasExtra: true,
+      requestId: 1,
+    })
+  })
 })
 
 describe('code tool envelope', () => {
@@ -378,6 +421,28 @@ describe('buildDispatchFunctions error handling', () => {
       details: undefined,
     })
   })
+
+  it('preserves structuredContent details in error sentinel', async () => {
+    const tools: McpToolDefinitionListItem[] = [{
+      name: 'structured-fail',
+      description: 'Fails with structured error',
+      inputSchema: {},
+      handler: async () => ({
+        isError: true,
+        structuredContent: { code: 'FORBIDDEN', reason: 'Not authorized' },
+        content: [{ type: 'text' as const, text: 'Permission denied' }],
+      }),
+    }]
+    const { toolNameMap } = generateTypesFromTools(tools)
+    const fns = buildDispatchFunctions(tools, toolNameMap, mockMcpExtra())
+
+    await expect(fns.structured_fail!({})).resolves.toEqual({
+      __mcp_toolkit_error__: true,
+      message: 'Permission denied',
+      tool: 'structured_fail',
+      details: { code: 'FORBIDDEN', reason: 'Not authorized' },
+    })
+  })
 })
 
 describe('annotation surfacing', () => {
@@ -477,7 +542,7 @@ describe('backward compatibility', () => {
 })
 
 describe('annotation vs description comment boundary', () => {
-  it('preserves annotation tag comments but strips plain description comments', () => {
+  it('preserves descriptions for all tools, with annotation tags prepended when present', () => {
     const tools: McpToolDefinitionListItem[] = [
       {
         name: 'annotated-tool',
@@ -497,7 +562,7 @@ describe('annotation vs description comment boundary', () => {
 
     // Annotated tool: tag + description preserved
     expect(typeDefinitions).toContain('[read-only] This has annotations')
-    // Plain tool: description stripped from compact type block
-    expect(typeDefinitions).not.toContain('// This has no annotations')
+    // Plain tool: description also preserved
+    expect(typeDefinitions).toContain('// This has no annotations')
   })
 })

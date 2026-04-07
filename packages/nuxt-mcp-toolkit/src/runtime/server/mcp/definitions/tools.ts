@@ -171,7 +171,7 @@ export async function invokeWrappedToolHandler(
   input: unknown,
   extra: McpRequestExtra,
 ): Promise<McpToolCallbackResult> {
-  if (tool.inputSchema && Object.keys(tool.inputSchema).length > 0) {
+  if (tool.inputSchema !== undefined) {
     return await handler(input ?? {}, extra) as McpToolCallbackResult
   }
 

@@ -173,8 +173,6 @@ interface ToolTypeInfo {
   interfaceDecl: string | null
   outputInterfaceDecl: string | null
   methodSignature: string
-  /** True when hint or annotations are set — comment should be preserved in type block. */
-  preserveComment: boolean
 }
 
 function generateToolTypeInfo(tool: McpToolDefinition): ToolTypeInfo {
@@ -236,7 +234,6 @@ function generateToolTypeInfo(tool: McpToolDefinition): ToolTypeInfo {
     interfaceDecl,
     outputInterfaceDecl,
     methodSignature,
-    preserveComment: annotationTags.length > 0,
   }
 }
 
@@ -245,8 +242,9 @@ function buildToolNameMap(infos: ToolTypeInfo[]): Map<string, string> {
   for (const info of infos) {
     const existing = map.get(info.sanitizedName)
     if (existing && existing !== info.originalName) {
-      throw new Error(
-        `[nuxt-mcp-toolkit] Code Mode tool name collision: "${existing}" and "${info.originalName}" both sanitize to "${info.sanitizedName}". Rename one of the tools.`,
+      console.warn(
+        `[nuxt-mcp-toolkit] Code Mode tool name collision: "${existing}" and "${info.originalName}" both sanitize to "${info.sanitizedName}". `
+        + `Only the last tool will be available. Rename one of the tools to avoid this. This will become an error in a future version.`,
       )
     }
     map.set(info.sanitizedName, info.originalName)
@@ -268,7 +266,7 @@ export function generateTypesFromTools(tools: McpToolDefinitionListItem[]): Gene
     .join('\n\n')
 
   const methods = toolInfos
-    .map(t => `  ${t.preserveComment ? t.methodSignature.trimEnd() : t.methodSignature.replace(/ \/\/.*$/, '').trimEnd()}`)
+    .map(t => `  ${t.methodSignature.trimEnd()}`)
     .join('\n')
 
   const codemodeDecl = `declare const codemode: {\n${methods}\n};`

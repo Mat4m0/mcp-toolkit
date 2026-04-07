@@ -163,6 +163,62 @@ describe('executor AsyncLocalStorage context', () => {
   })
 })
 
+describe('executor AsyncLocalStorage fallback', () => {
+  it('degrades gracefully when snapshot is unavailable (Node <18.16)', async () => {
+    const original = AsyncLocalStorage.snapshot
+    try {
+      // Simulate Node < 18.16 where snapshot does not exist
+      // @ts-expect-error -- deliberately removing static method
+      delete AsyncLocalStorage.snapshot
+
+      const serverMock = createServerMock()
+      const secureExec = createSecureExecMock(async (code: string) => {
+        const { token, execId } = extractExecMetadata(code)
+        const handler = serverMock.getRequestHandler()!
+        const returnRes = createMockResponse()
+        await invokeHandler(handler, createJsonRequest({ tool: '__return__', args: 'fallback-ok', execId }, token), returnRes.res)
+        return { code: 0 }
+      })
+
+      const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+      const mod = await importExecutorWithMocks({
+        createServer: serverMock.createServer,
+        secureExecModule: secureExec.module,
+      })
+
+      const result = await mod.execute('return 1;', {})
+
+      expect(result.error).toBeUndefined()
+      expect(result.result).toBe('fallback-ok')
+      expect(warnSpy).toHaveBeenCalledWith(
+        expect.stringContaining('AsyncLocalStorage.snapshot unavailable'),
+      )
+
+      // Second call should not warn again
+      warnSpy.mockClear()
+      const secureExec2 = createSecureExecMock(async (code: string) => {
+        const { token, execId } = extractExecMetadata(code)
+        const handler = serverMock.getRequestHandler()!
+        const returnRes = createMockResponse()
+        await invokeHandler(handler, createJsonRequest({ tool: '__return__', args: 'second-ok', execId }, token), returnRes.res)
+        return { code: 0 }
+      })
+      vi.doMock('secure-exec', () => secureExec2.module)
+      const result2 = await mod.execute('return 2;', {})
+
+      expect(result2.error).toBeUndefined()
+      expect(warnSpy).not.toHaveBeenCalledWith(
+        expect.stringContaining('AsyncLocalStorage.snapshot unavailable'),
+      )
+
+      warnSpy.mockRestore()
+    }
+    finally {
+      AsyncLocalStorage.snapshot = original
+    }
+  })
+})
+
 describe('executor session isolation', () => {
   it('creates independent runtimes with per-execution limits', async () => {
     const { createServer } = createServerMock()

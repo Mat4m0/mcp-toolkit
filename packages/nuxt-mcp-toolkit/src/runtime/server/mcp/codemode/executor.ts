@@ -48,6 +48,7 @@ interface ActiveSession {
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 let secureExecModule: any = null
 const activeSessions = new Set<ActiveSession>()
+let snapshotWarnLogged = false
 
 async function loadSecureExec() {
   if (secureExecModule) return secureExecModule
@@ -376,16 +377,18 @@ export async function execute(
   const startedAt = Date.now()
   const logs: string[] = []
 
-  if (typeof AsyncLocalStorage.snapshot !== 'function') {
-    return {
-      result: undefined,
-      error: '[nuxt-mcp-toolkit] Code Mode requires Node.js >=18.16.0 (AsyncLocalStorage.snapshot is unavailable).',
-      logs,
-      durationMs: Date.now() - startedAt,
-    }
-  }
-
-  const restoreContext = AsyncLocalStorage.snapshot()
+  const restoreContext = typeof AsyncLocalStorage.snapshot === 'function'
+    ? AsyncLocalStorage.snapshot()
+    : (() => {
+        if (!snapshotWarnLogged) {
+          snapshotWarnLogged = true
+          console.warn(
+            '[nuxt-mcp-toolkit] AsyncLocalStorage.snapshot unavailable (Node.js <18.16.0). '
+            + 'Tool handlers in code mode will not have access to request context (useEvent, auth, etc.).',
+          )
+        }
+        return <R, TArgs extends unknown[]>(fn: (...args: TArgs) => R, ...args: TArgs) => fn(...args)
+      })()
   let returnedResult: { received: boolean, value: unknown } = { received: false, value: undefined }
   let rpcSession: RpcSession | null = null
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
