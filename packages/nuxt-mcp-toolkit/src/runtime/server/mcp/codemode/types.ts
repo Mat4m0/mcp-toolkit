@@ -30,12 +30,9 @@ export interface CodeModeOptions {
   description?: string
 }
 
-export interface ExecuteResult {
-  result: unknown
-  error?: string
-  logs: string[]
-  durationMs: number
-}
+export type ExecuteResult =
+  | { result: unknown, error?: undefined, logs: string[], durationMs: number }
+  | { result?: undefined, error: string, logs: string[], durationMs: number }
 
 const RESERVED_WORDS = new Set([
   'break', 'case', 'catch', 'continue', 'debugger', 'default', 'delete', 'do',
@@ -65,7 +62,7 @@ function formatTsPropertyKey(key: string): string {
 
 function jsonSchemaPropertyToTs(prop: Record<string, unknown>): string {
   if (prop.enum && Array.isArray(prop.enum)) {
-    return prop.enum.map(v => typeof v === 'string' ? `"${v}"` : String(v)).join(' | ')
+    return prop.enum.map(v => typeof v === 'string' ? JSON.stringify(v) : String(v)).join(' | ')
   }
 
   const type = prop.type as string | string[] | undefined

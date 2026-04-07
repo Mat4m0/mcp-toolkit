@@ -8,6 +8,7 @@ import {
 } from '../src/runtime/server/mcp/codemode/types'
 import { buildDispatchFunctions, createCodemodeTools, disposeCodeMode } from '../src/runtime/server/mcp/codemode/index'
 import { normalizeCode } from '../src/runtime/server/mcp/codemode/executor'
+import { isCallToolResult } from '../src/runtime/server/mcp/definitions/results'
 import type { McpRequestExtra } from '../src/runtime/server/mcp/definitions/sdk-extra'
 import type { McpToolDefinition, McpToolDefinitionListItem } from '../src/runtime/server/mcp/definitions/tools'
 
@@ -222,7 +223,7 @@ describe('buildDispatchFunctions', () => {
     const fns = buildDispatchFunctions(tools, toolNameMap, mockMcpExtra())
 
     await expect(fns.delete_item!({ id: 'missing' })).resolves.toEqual({
-      __toolError: true,
+      __mcp_toolkit_error__: true,
       message: 'Item not found',
       tool: 'delete_item',
       details: undefined,
@@ -310,5 +311,71 @@ describe('normalizeCode', () => {
 describe('disposeCodeMode', () => {
   it('is exported and callable', () => {
     expect(() => disposeCodeMode()).not.toThrow()
+  })
+})
+
+describe('isCallToolResult', () => {
+  it('matches objects with content array', () => {
+    expect(isCallToolResult({ content: [{ type: 'text', text: 'hi' }] })).toBe(true)
+  })
+
+  it('matches objects with structuredContent', () => {
+    expect(isCallToolResult({ structuredContent: { data: 1 } })).toBe(true)
+  })
+
+  it('matches objects with boolean isError', () => {
+    expect(isCallToolResult({ isError: true })).toBe(true)
+    expect(isCallToolResult({ isError: false })).toBe(true)
+  })
+
+  it('rejects objects with non-boolean isError', () => {
+    expect(isCallToolResult({ isError: 'yes' })).toBe(false)
+    expect(isCallToolResult({ isError: 0 })).toBe(false)
+  })
+
+  it('rejects plain objects with incidental properties', () => {
+    expect(isCallToolResult({ content: 'not-an-array' })).toBe(false)
+    expect(isCallToolResult({ ok: true, data: 123 })).toBe(false)
+  })
+})
+
+describe('enum escaping in type generation', () => {
+  it('escapes special characters in enum values', () => {
+    const tools: McpToolDefinitionListItem[] = [{
+      name: 'get-quote',
+      description: 'Get a quote',
+      inputSchema: {
+        style: z.enum(['he said "hello"', "it's fine", 'back\\slash']),
+      },
+      handler: async () => 'ok',
+    }]
+    const { typeDefinitions } = generateTypesFromTools(tools)
+
+    expect(typeDefinitions).toContain('"he said \\"hello\\""')
+    expect(typeDefinitions).toContain('"it\'s fine"')
+    expect(typeDefinitions).toContain('"back\\\\slash"')
+  })
+})
+
+describe('buildDispatchFunctions error handling', () => {
+  it('normalizes isError CallToolResult into tool-error sentinel', async () => {
+    const tools: McpToolDefinitionListItem[] = [{
+      name: 'fail-tool',
+      description: 'Fails with isError',
+      inputSchema: {},
+      handler: async () => ({
+        isError: true,
+        content: [{ type: 'text' as const, text: 'Permission denied' }],
+      }),
+    }]
+    const { toolNameMap } = generateTypesFromTools(tools)
+    const fns = buildDispatchFunctions(tools, toolNameMap, mockMcpExtra())
+
+    await expect(fns.fail_tool!({})).resolves.toEqual({
+      __mcp_toolkit_error__: true,
+      message: 'Permission denied',
+      tool: 'fail_tool',
+      details: undefined,
+    })
   })
 })

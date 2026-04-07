@@ -13,7 +13,7 @@ export function isCallToolResult(value: object): value is CallToolResult {
   return (
     ('content' in value && Array.isArray((value as CallToolResult).content))
     || 'structuredContent' in value
-    || 'isError' in value
+    || ('isError' in value && typeof (value as CallToolResult).isError === 'boolean')
   )
 }
 

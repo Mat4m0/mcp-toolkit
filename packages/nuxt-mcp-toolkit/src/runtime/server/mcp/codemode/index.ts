@@ -23,19 +23,15 @@ import {
 export type { CodeModeOptions }
 
 interface CodeModeToolError {
-  __toolError: true
+  __mcp_toolkit_error__: true
   message: string
   tool: string
   details?: unknown
 }
 
-interface CodeToolEnvelope {
-  ok: boolean
-  result?: unknown
-  error?: string
-  logs?: string[]
-  durationMs: number
-}
+type CodeToolEnvelope =
+  | { ok: true, result?: unknown, error?: undefined, logs?: string[], durationMs: number }
+  | { ok: false, result?: undefined, error: string, logs?: string[], durationMs: number }
 
 interface DispatchToolEntry {
   originalName: string
@@ -280,7 +276,7 @@ function extractTextContent(result: { content?: Array<{ type: string, text?: str
 
 function toToolError(result: { content?: Array<{ type: string, text?: string }>, structuredContent?: unknown }, tool: string): CodeModeToolError {
   return {
-    __toolError: true,
+    __mcp_toolkit_error__: true,
     message: extractTextContent(result)
       ?? (result.structuredContent !== undefined ? JSON.stringify(result.structuredContent) : 'Tool execution failed'),
     tool,
@@ -325,21 +321,16 @@ function normalizeDispatchResult(rawResult: unknown, tool: string): unknown {
 }
 
 function createCodeToolEnvelope(result: ExecuteResult): CodeToolEnvelope {
-  const envelope: CodeToolEnvelope = {
-    ok: !result.error,
-    durationMs: result.durationMs,
+  const logs = result.logs.length > 0 ? result.logs : undefined
+
+  if (result.error) {
+    return { ok: false, error: result.error, logs, durationMs: result.durationMs }
   }
 
+  const envelope: CodeToolEnvelope = { ok: true, durationMs: result.durationMs, logs }
   if (result.result !== undefined) {
     envelope.result = result.result
   }
-  if (result.error) {
-    envelope.error = result.error
-  }
-  if (result.logs.length > 0) {
-    envelope.logs = result.logs
-  }
-
   return envelope
 }
 
@@ -394,5 +385,5 @@ export { sanitizeToolName }
 export function disposeCodeMode(): void {
   void import('./executor')
     .then(m => m.dispose())
-    .catch(() => {})
+    .catch(error => console.warn('[nuxt-mcp-toolkit] disposeCodeMode failed:', error))
 }

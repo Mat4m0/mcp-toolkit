@@ -9,7 +9,7 @@ export { normalizeCode }
 
 type DispatchFn = (args: unknown) => Promise<unknown>
 
-const ERROR_PREFIX = '__ERROR__'
+const ERROR_PREFIX = '__MCP_EXEC_ERR__'
 const DEFAULT_MAX_RESULT_SIZE = 102_400
 const DEFAULT_MAX_REQUEST_BODY_BYTES = 1_048_576
 const DEFAULT_MAX_TOOL_RESPONSE_SIZE = 1_048_576
@@ -241,6 +241,8 @@ async function createRpcSession(
         execId,
         maxRequestBodyBytes,
         token,
+      }).catch(() => {
+        if (!res.headersSent) res.destroy()
       })
     })
 
@@ -248,7 +250,8 @@ async function createRpcSession(
       try {
         server.close()
       }
-      catch {
+      catch (closeError) {
+        console.warn('[nuxt-mcp-toolkit] server.close() failed during error handling:', closeError)
       }
       reject(error)
     }
@@ -269,15 +272,7 @@ async function createRpcSession(
   })
 }
 
-let cachedProxyKey = ''
-let cachedProxyCode = ''
-
 function getProxyBoilerplate(toolNames: string[], port: number, token: string): string {
-  const key = `${port}:${token}:${toolNames.join(',')}`
-  if (key === cachedProxyKey) {
-    return cachedProxyCode
-  }
-
   for (const name of toolNames) {
     if (!SAFE_IDENTIFIER.test(name)) {
       throw new Error(`[nuxt-mcp-toolkit] Unsafe tool name rejected: "${name}"`)
@@ -288,7 +283,7 @@ function getProxyBoilerplate(toolNames: string[], port: number, token: string): 
     .map(name => `  ${name}: (input) => rpc('${name}', input)`)
     .join(',\n')
 
-  cachedProxyCode = `
+  return `
 async function rpc(toolName, args) {
   const res = await fetch('http://127.0.0.1:${port}', {
     method: 'POST',
@@ -297,7 +292,7 @@ async function rpc(toolName, args) {
   });
   const data = JSON.parse(typeof res.text === 'function' ? await res.text() : res.body);
   if (data.error) throw new Error(data.error);
-  if (data.result && data.result.__toolError) {
+  if (data.result && data.result.__mcp_toolkit_error__) {
     const err = new Error(data.result.message);
     err.tool = data.result.tool;
     err.isToolError = true;
@@ -310,8 +305,6 @@ async function rpc(toolName, args) {
 const codemode = {
 ${proxyMethods}
 };`
-  cachedProxyKey = key
-  return cachedProxyCode
 }
 
 function buildSandboxCode(
@@ -410,7 +403,8 @@ export async function execute(
         try {
           runtime.dispose()
         }
-        catch {
+        catch (disposeError) {
+          console.warn('[nuxt-mcp-toolkit] runtime.dispose() failed during cleanup:', disposeError)
         }
         runtime = null
       }
@@ -418,7 +412,8 @@ export async function execute(
         try {
           rpcSession.server.close()
         }
-        catch {
+        catch (closeError) {
+          console.warn('[nuxt-mcp-toolkit] server.close() failed during cleanup:', closeError)
         }
         rpcSession = null
       }
@@ -469,7 +464,8 @@ export async function execute(
       try {
         runtime?.dispose()
       }
-      catch {
+      catch (disposeError) {
+        console.warn('[nuxt-mcp-toolkit] runtime.dispose() failed during wall-time timeout:', disposeError)
       }
     }, wallTimeLimitMs)
 
@@ -548,6 +544,7 @@ export async function execute(
     }
   }
   catch (error) {
+    console.error('[nuxt-mcp-toolkit] Execution error:', error)
     return {
       result: undefined,
       error: sanitizeErrorMessage(getErrorMessage(error)),
@@ -568,6 +565,4 @@ export function dispose(): void {
   }
 
   secureExecModule = null
-  cachedProxyKey = ''
-  cachedProxyCode = ''
 }
