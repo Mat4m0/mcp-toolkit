@@ -9,7 +9,17 @@ import {
 } from '../src/runtime/server/mcp/codemode/types'
 import { createCodemodeTools, disposeCodeMode, buildDispatchFunctions } from '../src/runtime/server/mcp/codemode/index'
 import { normalizeCode } from '../src/runtime/server/mcp/codemode/executor'
-import type { McpToolDefinition } from '../src/runtime/server/mcp/definitions/tools'
+import type { McpToolDefinition, McpToolDefinitionListItem } from '../src/runtime/server/mcp/definitions/tools'
+import type { McpRequestExtra } from '../src/runtime/server/mcp/definitions/sdk-extra'
+
+function mockMcpExtra(): McpRequestExtra {
+  return {
+    signal: new AbortController().signal,
+    requestId: 0,
+    sendNotification: async () => {},
+    sendRequest: (async () => ({})) as McpRequestExtra['sendRequest'],
+  }
+}
 
 function makeTool(name: string, description: string, inputSchema?: Record<string, z.ZodTypeAny>): McpToolDefinition {
   return {
@@ -246,6 +256,114 @@ describe('createCodemodeTools', () => {
 
     expect(searchTool.annotations?.readOnlyHint).toBe(true)
     expect(searchTool.annotations?.destructiveHint).toBe(false)
+  })
+})
+
+describe('buildDispatchFunctions — structuredContent handling', () => {
+  it('returns structuredContent when present, not text content', async () => {
+    const tools: McpToolDefinitionListItem[] = [{
+      name: 'create-item',
+      description: 'Create an item',
+      inputSchema: { title: z.string() },
+      handler: async () => ({
+        structuredContent: { ok: true, data: { id: 'abc123' } },
+        content: [{ type: 'text' as const, text: 'Created item successfully' }],
+      }),
+    }]
+    const [codeTool] = createCodemodeTools(tools)
+    const result = await codeTool!.handler!({ code: 'return await codemode.create_item({ title: "Test" })' }, mockMcpExtra())
+    const text = (result as { content: { text: string }[] }).content[0]!.text
+    const parsed = JSON.parse(text)
+
+    expect(parsed).toEqual({ ok: true, data: { id: 'abc123' } })
+  })
+
+  it('preserves typed fields (booleans, nested objects) from structuredContent', async () => {
+    const tools: McpToolDefinitionListItem[] = [{
+      name: 'get-status',
+      description: 'Get status',
+      inputSchema: {},
+      handler: async () => ({
+        structuredContent: { active: true, count: 42, nested: { a: [1, 2] } },
+        content: [{ type: 'text' as const, text: 'Status OK' }],
+      }),
+    }]
+    const [codeTool] = createCodemodeTools(tools)
+    const result = await codeTool!.handler!({ code: 'return await codemode.get_status()' }, mockMcpExtra())
+    const text = (result as { content: { text: string }[] }).content[0]!.text
+    const parsed = JSON.parse(text)
+
+    expect(parsed.active).toBe(true)
+    expect(parsed.count).toBe(42)
+    expect(parsed.nested).toEqual({ a: [1, 2] })
+  })
+
+  it('enables operation chaining with structuredContent IDs', async () => {
+    const tools: McpToolDefinitionListItem[] = [
+      {
+        name: 'create-item',
+        description: 'Create an item',
+        inputSchema: { title: z.string() },
+        handler: async () => ({
+          structuredContent: { ok: true, data: { id: 'xyz789' } },
+          content: [{ type: 'text' as const, text: 'Created' }],
+        }),
+      },
+      {
+        name: 'update-item',
+        description: 'Update an item',
+        inputSchema: { id: z.string(), title: z.string() },
+        handler: async (args: Record<string, unknown>) => ({
+          structuredContent: { ok: true, data: { id: args.id, title: args.title } },
+          content: [{ type: 'text' as const, text: `Updated ${args.id}` }],
+        }),
+      },
+    ]
+    const [codeTool] = createCodemodeTools(tools)
+    const result = await codeTool!.handler!({
+      code: `
+        const created = await codemode.create_item({ title: "Test" });
+        const updated = await codemode.update_item({ id: created.data.id, title: "Updated" });
+        return updated;
+      `,
+    }, mockMcpExtra())
+    const text = (result as { content: { text: string }[] }).content[0]!.text
+    const parsed = JSON.parse(text)
+
+    expect(parsed).toEqual({ ok: true, data: { id: 'xyz789', title: 'Updated' } })
+  })
+
+  it('falls back to text content when structuredContent is absent', async () => {
+    const tools: McpToolDefinitionListItem[] = [{
+      name: 'echo',
+      description: 'Echo text',
+      inputSchema: { msg: z.string() },
+      handler: async (args: Record<string, unknown>) => ({
+        content: [{ type: 'text' as const, text: args.msg as string }],
+      }),
+    }]
+    const [codeTool] = createCodemodeTools(tools)
+    const result = await codeTool!.handler!({ code: 'return await codemode.echo({ msg: "hello" })' }, mockMcpExtra())
+    const text = (result as { content: { text: string }[] }).content[0]!.text
+
+    expect(text).toBe('hello')
+  })
+
+  it('handles structuredContent-only result (no content array)', async () => {
+    const tools: McpToolDefinitionListItem[] = [{
+      name: 'data-only',
+      description: 'Data only tool',
+      inputSchema: {},
+      handler: async () => ({
+        structuredContent: { value: 99 },
+      }),
+    }]
+    const [codeTool] = createCodemodeTools(tools)
+    const result = await codeTool!.handler!({ code: 'return await codemode.data_only()' }, mockMcpExtra())
+    const text = (result as { content: { text: string }[] }).content[0]!.text
+    const parsed = JSON.parse(text)
+
+    expect(parsed).toEqual({ value: 99 })
   })
 })
 
